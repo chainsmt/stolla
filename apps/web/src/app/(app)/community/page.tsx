@@ -304,9 +304,9 @@ export default function CommunityPage() {
             </section>
           )}
 
-          {refreshing && (
+          {refreshing && !initialLoading && (
             <LiveStatus className="text-sm text-slate-400">
-              Loading community data...
+              Loading community data…
             </LiveStatus>
           )}
 

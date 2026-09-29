@@ -89,6 +89,7 @@ describe("CommunityPage loading and RPC failures", () => {
     render(<CommunityPage />);
 
     expect(screen.getByText("Loading community data…")).toBeInTheDocument();
+    expect(screen.getAllByRole("status")).toHaveLength(1);
     expect(screen.queryByText("0")).not.toBeInTheDocument();
 
     await act(async () => {
