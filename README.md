@@ -200,7 +200,7 @@ environment files, dependencies, npm caches, and the root lockfile.
 ## End-to-end flow
 
 1. Connect Freighter on testnet
-2. **Community owner** mints NFT to a member with an IPFS metadata URI
+2. **Community owner** mints an NFT to a member by entering a name, description, and optional image (Stolla pins the metadata to IPFS)
 3. **Member** delegates voting power to themselves
 4. **Proposer** creates a proposal (needs delegated NFT voting power)
 5. **Member** casts a vote on the proposal detail page
@@ -216,6 +216,8 @@ stolla/
 ```
 
 ## Documentation
+
+- [ADR-003: IPFS Metadata](docs/adr/003-ipfs-metadata.md) explains upload-first metadata. Stolla pins through `/api/ipfs/pin` with the server-only `PINATA_JWT`, so users never paste URIs.
 
 - [Proposal Metadata v1](docs/proposal-metadata-v1.md) defines the backwards-compatible Governor description envelope and fallback rules.
 

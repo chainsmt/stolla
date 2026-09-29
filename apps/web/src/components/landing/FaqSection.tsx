@@ -26,9 +26,14 @@ const FAQ = [
       "MVP proposals are signaling votes with empty on-chain targets. They record community decisions transparently. Timelock and treasury execution are planned for later.",
   },
   {
+    question: "Do I need to host metadata or paste IPFS links?",
+    answer:
+      "No. When you create a community, you fill in its name, symbol, description, and an optional logo. Stolla builds the metadata documents and pins them to IPFS for you. It also records their hash on-chain.",
+  },
+  {
     question: "How is NFT metadata stored?",
     answer:
-      "Each token stores an IPFS metadata URI on-chain (SEP-0050 compatible). In the MVP you paste the URI when minting. An upload helper may come later.",
+      "When you mint, you enter a display name and description and can upload an image. Stolla pins SEP-0050 metadata to IPFS and stores the generated ipfs:// URI on-chain for that token. You never type a URI.",
   },
 ] as const;
 

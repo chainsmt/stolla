@@ -15,7 +15,7 @@ const STEPS = [
     step: "2",
     title: "Mint members",
     description:
-      "Issue membership NFTs with per-token IPFS metadata URIs. Each token is a governance identity.",
+      "Issue membership NFTs from a simple form. Stolla pins each token's metadata to IPFS for you. Each token is a governance identity.",
     image: LANDING_IMAGES.steps.mint,
     imageAlt: "Membership NFT badge being minted",
   },

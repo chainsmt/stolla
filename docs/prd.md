@@ -31,7 +31,7 @@ Stolla lets Stellar projects launch a community with an NFT membership collectio
 - Contracts compile and pass unit tests on CI
 - Frontend builds and connects Freighter on testnet
 - End-to-end flow works: mint → delegate → propose → vote
-- NFT metadata resolves via IPFS URI (manual URI input accepted in MVP)
+- NFT metadata resolves via IPFS URI; Stolla generates and pins it in-app (no manual URI input)
 
 ## Governance Parameters (testnet defaults)
 
