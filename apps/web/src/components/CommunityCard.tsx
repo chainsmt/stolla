@@ -1,11 +1,28 @@
+"use client";
+
 import { CommunityAvatar } from "@/components/CommunityAvatar";
 import { AppLinkButton } from "@/components/ui/AppLinkButton";
+import { useCommunityMembership } from "@/hooks/useCommunityMembership";
+import {
+  membershipLabel,
+} from "@/lib/community/membership";
 import type { CommunityView } from "@/lib/community/types";
 import { truncateMiddle } from "@/lib/truncate";
+
+const MEMBERSHIP_STYLES: Record<
+  "member" | "non_member" | "unknown",
+  string
+> = {
+  member: "border-emerald-800/80 bg-emerald-950/50 text-emerald-200",
+  non_member: "border-slate-700 bg-slate-900/60 text-slate-400",
+  unknown: "border-amber-800/70 bg-amber-950/40 text-amber-200",
+};
 
 export function CommunityCard({ community }: { community: CommunityView }) {
   const { metadata, metadataError, record, governance } = community;
   const name = metadata?.name ?? `Community ${truncateMiddle(record.id, 8, 6)}`;
+  const membership = useCommunityMembership(record.nftContract);
+  const membershipText = membershipLabel(membership);
 
   return (
     <article className="flex h-full min-w-0 flex-col rounded-xl border border-slate-800 bg-[#151b2b] p-4 sm:p-5">
@@ -15,10 +32,24 @@ export function CommunityCard({ community }: { community: CommunityView }) {
           name={name}
           logo={metadata?.logo}
         />
-        <div className="min-w-0">
-          <h2 className="break-words text-lg font-semibold text-slate-100 [overflow-wrap:anywhere]">
-            {name}
-          </h2>
+        <div className="min-w-0 flex-1">
+          <div className="flex min-w-0 flex-wrap items-start gap-2">
+            <h2 className="break-words text-lg font-semibold text-slate-100 [overflow-wrap:anywhere]">
+              {name}
+            </h2>
+            {membershipText &&
+            (membership === "member" ||
+              membership === "non_member" ||
+              membership === "unknown") ? (
+              <span
+                data-testid="community-membership"
+                data-membership={membership}
+                className={`inline-flex shrink-0 items-center rounded-md border px-2 py-0.5 text-[11px] font-medium leading-4 ${MEMBERSHIP_STYLES[membership]}`}
+              >
+                {membershipText}
+              </span>
+            ) : null}
+          </div>
           <p
             className="mt-0.5 break-all font-mono text-xs text-slate-500"
             title={record.id}
