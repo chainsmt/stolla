@@ -168,6 +168,8 @@ export default function ProposalsPage() {
   );
 
   useEffect(() => {
+    // Async proposal-state fetch owns its loading/error sub-states.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     void loadStates();
   }, [loadStates]);
 
@@ -195,6 +197,8 @@ export default function ProposalsPage() {
 
   useEffect(() => {
     if (stateFilter !== ALL_FILTER && !availableStates.includes(stateFilter)) {
+      // Drop stale filter when the available set shrinks after a reload.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setStateFilter(ALL_FILTER);
     }
   }, [availableStates, stateFilter]);

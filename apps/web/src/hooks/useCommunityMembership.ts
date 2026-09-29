@@ -23,6 +23,8 @@ export function useCommunityMembership(
 
   useEffect(() => {
     if (!address || !nftContractId) {
+      // Wallet/contract identity is external; sync membership label off-render.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setState("disconnected");
       return;
     }
