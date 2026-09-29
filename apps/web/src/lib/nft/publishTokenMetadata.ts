@@ -1,4 +1,5 @@
 import type { IpfsPinClient } from "@/lib/ipfs/pin";
+import { validateMintTokenUri } from "@/lib/community/mint-token-uri";
 import {
   buildTokenMetadataDocument,
   encodeTokenMetadata,
@@ -33,6 +34,10 @@ export async function publishTokenMetadata(
   const document = buildTokenMetadataDocument(draft, imageUri);
   const bytes = encodeTokenMetadata(document);
   const pinned = await pin.pinJson(bytes, TOKEN_METADATA_DOCUMENT_NAME);
+  const uriError = validateMintTokenUri(pinned.uri);
+  if (uriError) {
+    throw new Error(uriError);
+  }
   return {
     tokenUri: pinned.uri,
     ...(imageUri ? { imageUri } : {}),

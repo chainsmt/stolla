@@ -247,6 +247,28 @@ describe("CommunityPage mint lifecycle", () => {
     expect(mocks.pinFile).not.toHaveBeenCalled();
   });
 
+  it("rejects a scheme-only generated token_uri before mint simulation", async () => {
+    const mint = vi.fn();
+    mocks.createNftClient.mockReturnValue({ mint });
+    mocks.pinJson.mockResolvedValue({
+      cid: "",
+      uri: "ipfs://",
+      size: 1,
+    });
+
+    render(<CommunityPage />);
+    fireEvent.change(await screen.findByLabelText(/Recipient address/i), {
+      target: { value: "GRECIPIENT" },
+    });
+    fillMembership();
+    fireEvent.click(screen.getByRole("button", { name: "Mint NFT" }));
+
+    expect(
+      await screen.findByText(/Scheme alone is not enough/i),
+    ).toBeInTheDocument();
+    expect(mint).not.toHaveBeenCalled();
+  });
+
   it("pins image then document and calls mint with the generated token_uri only", async () => {
     const mint = vi.fn().mockResolvedValue({
       sign: async () => undefined,

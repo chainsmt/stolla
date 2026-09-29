@@ -38,6 +38,7 @@ import { AppButton } from "@/components/ui/AppButton";
 import { LiveStatus } from "@/components/ui/LiveStatus";
 import { TransactionLifecycleStatus } from "@/components/TransactionLifecycleStatus";
 import { useOperationLifecycle } from "@/hooks/useOperationLifecycle";
+import { validateMintTokenUri } from "@/lib/community/mint-token-uri";
 import {
   loadCommunityData,
   runCommunityRefresh,
@@ -308,6 +309,13 @@ export default function CommunityPage() {
 
     const published = await pinTokenMetadata();
     if (!published) return;
+
+    // Guard the generated token_uri before wallet/simulation work (SEP-0050).
+    const uriError = validateMintTokenUri(published.tokenUri);
+    if (uriError) {
+      setPinState({ kind: "error", message: uriError, retryable: true });
+      return;
+    }
 
     const result = await mintLifecycle.execute(async () => {
       const client = createNftClient({
