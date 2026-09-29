@@ -1,7 +1,31 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  type ChangeEvent,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { useWallet } from "@/context/WalletProvider";
+import { getE2EBridge } from "@/lib/e2eMock";
+import { formatBytes, IPFS_UPLOAD_LIMITS } from "@/lib/ipfs/limits";
+import {
+  createIpfsPinClient,
+  IpfsPinError,
+  validateImageFile,
+} from "@/lib/ipfs/pin";
+import {
+  publishTokenMetadata,
+  type PublishedTokenMetadata,
+  type TokenPublishStep,
+} from "@/lib/nft/publishTokenMetadata";
+import {
+  TOKEN_METADATA_LIMITS,
+  validateTokenMetadataDraft,
+  type TokenMetadataDraftErrors,
+} from "@/lib/nft/tokenMetadata";
 import {
   createNftClient,
   createReadOnlyNftClient,
@@ -24,6 +48,32 @@ type ActionStatus = {
   tone: "routine" | "error";
 };
 
+/**
+ * Mint authoring is upload-first: the member metadata is typed as fields and
+ * pinned by Stolla. `token_uri` exists only as generated state after a
+ * successful pin and is cleared by any later edit.
+ */
+type PinState =
+  | { kind: "idle" }
+  | { kind: "pinning"; step: TokenPublishStep }
+  | { kind: "error"; message: string; retryable: boolean };
+
+const IMAGE_ACCEPT = IPFS_UPLOAD_LIMITS.imageTypes.join(",");
+
+function describePinError(error: unknown): { message: string; retryable: boolean } {
+  if (error instanceof IpfsPinError) {
+    return {
+      message:
+        error.kind === "config"
+          ? `${error.message} Retrying will not help until the server is configured.`
+          : error.message,
+      retryable: error.retryable,
+    };
+  }
+  const message = error instanceof Error ? error.message : String(error);
+  return { message: message || "Pinning failed.", retryable: true };
+}
+
 export default function CommunityPage() {
   const { address, signTransaction } = useWallet();
   const registry = useCommunityRegistry();
@@ -32,9 +82,17 @@ export default function CommunityPage() {
   const [balance, setBalance] = useState<number | null>(null);
   const [votes, setVotes] = useState<string | null>(null);
   const [recipient, setRecipient] = useState("");
-  const [tokenUri, setTokenUri] = useState("ipfs://");
+  const [tokenName, setTokenName] = useState("");
+  const [tokenDescription, setTokenDescription] = useState("");
+  const [tokenImage, setTokenImage] = useState<File | null>(null);
+  const [tokenImageError, setTokenImageError] = useState<string | null>(null);
+  const [tokenErrors, setTokenErrors] = useState<TokenMetadataDraftErrors>({});
+  const [pinState, setPinState] = useState<PinState>({ kind: "idle" });
+  const [publishedToken, setPublishedToken] =
+    useState<PublishedTokenMetadata | null>(null);
   const [recipientError, setRecipientError] = useState<string | null>(null);
-  const [tokenUriError, setTokenUriError] = useState<string | null>(null);
+  const pin = useMemo(() => getE2EBridge()?.pin ?? createIpfsPinClient(), []);
+  const pinInFlight = useRef(false);
   const [status, setStatus] = useState<ActionStatus | null>(null);
   const [dataLoadError, setDataLoadError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
@@ -75,7 +133,13 @@ export default function CommunityPage() {
       setStatus(null);
       setDataLoadError(null);
       setRecipient("");
-      setTokenUri("ipfs://");
+      setTokenName("");
+      setTokenDescription("");
+      setTokenImage(null);
+      setTokenImageError(null);
+      setTokenErrors({});
+      setPinState({ kind: "idle" });
+      setPublishedToken(null);
       resetDelegationLifecycle();
       resetMintLifecycle();
 
@@ -166,23 +230,84 @@ export default function CommunityPage() {
     void refresh();
   }, [refresh]);
 
+  const tokenDraft = { name: tokenName, description: tokenDescription };
+  const tokenDraftValid =
+    Object.keys(validateTokenMetadataDraft(tokenDraft)).length === 0 &&
+    !tokenImageError;
+
+  /** Any edit to the authoring fields drops the generated token_uri. */
+  function editTokenField(update: () => void) {
+    update();
+    setPublishedToken(null);
+    if (pinState.kind === "error") setPinState({ kind: "idle" });
+  }
+
+  function updateTokenImage(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0] ?? null;
+    editTokenField(() => {
+      if (!file) {
+        setTokenImage(null);
+        setTokenImageError(null);
+        return;
+      }
+      const rejection = validateImageFile(file);
+      if (rejection) {
+        setTokenImage(null);
+        setTokenImageError(rejection);
+        event.target.value = "";
+        return;
+      }
+      setTokenImage(file);
+      setTokenImageError(null);
+    });
+  }
+
+  /**
+   * Pins image → token.json and returns the generated token_uri, or null on
+   * failure (the inline error is retryable and the draft is kept).
+   */
+  async function pinTokenMetadata(): Promise<PublishedTokenMetadata | null> {
+    if (publishedToken) return publishedToken;
+    if (pinInFlight.current) return null;
+    pinInFlight.current = true;
+    setPinState({ kind: "pinning", step: tokenImage ? "image" : "document" });
+    try {
+      const result = await publishTokenMetadata(
+        tokenDraft,
+        tokenImage,
+        pin,
+        (step) => setPinState({ kind: "pinning", step }),
+      );
+      setPublishedToken(result);
+      setPinState({ kind: "idle" });
+      return result;
+    } catch (error) {
+      setPinState({ kind: "error", ...describePinError(error) });
+      return null;
+    } finally {
+      pinInFlight.current = false;
+    }
+  }
+
   async function handleMint() {
     if (!address) {
       setStatus({ message: "Connect your wallet first.", tone: "error" });
       return;
     }
-    if (!recipient || !tokenUri) {
-      setRecipientError(!recipient ? "Recipient address is required." : null);
-      setTokenUriError(!tokenUri ? "IPFS metadata URI is required." : null);
+    const nextTokenErrors = validateTokenMetadataDraft(tokenDraft);
+    setTokenErrors(nextTokenErrors);
+    setRecipientError(!recipient ? "Recipient address is required." : null);
+    if (!recipient || Object.keys(nextTokenErrors).length > 0 || tokenImageError) {
       setStatus(null);
       return;
     }
-    if (mintLifecycle.isInFlight) return;
+    if (mintLifecycle.isInFlight || pinState.kind === "pinning") return;
 
-    setRecipientError(null);
-    setTokenUriError(null);
     setStatus(null);
     mintLifecycle.reset();
+
+    const published = await pinTokenMetadata();
+    if (!published) return;
 
     const result = await mintLifecycle.execute(async () => {
       const client = createNftClient({
@@ -190,7 +315,7 @@ export default function CommunityPage() {
         signTransaction,
         contractId: activeNftContract,
       });
-      return client.mint({ to: recipient, token_uri: tokenUri });
+      return client.mint({ to: recipient, token_uri: published.tokenUri });
     });
 
     if (result.ok) {
@@ -449,55 +574,162 @@ export default function CommunityPage() {
               </div>
               <div>
                 <label
-                  htmlFor="token-uri"
+                  htmlFor="token-name"
                   className="block break-words text-sm text-slate-400"
                 >
-                  IPFS metadata URI{" "}
+                  Display name{" "}
                   <span className="text-slate-500">(required)</span>
                 </label>
                 <input
-                  id="token-uri"
-                  value={tokenUri}
-                  onChange={(e) => {
-                    setTokenUri(e.target.value);
-                    setTokenUriError(null);
-                  }}
+                  id="token-name"
+                  value={tokenName}
+                  onChange={(e) =>
+                    editTokenField(() => {
+                      setTokenName(e.target.value);
+                      setTokenErrors((current) => ({ ...current, name: undefined }));
+                    })
+                  }
                   type="text"
                   required
-                  aria-describedby={`token-uri-help${
-                    tokenUriError ? " token-uri-error" : ""
+                  aria-describedby={`token-name-help${
+                    tokenErrors.name ? " token-name-error" : ""
                   }`}
-                  aria-invalid={Boolean(tokenUriError)}
-                  autoCapitalize="none"
-                  autoCorrect="off"
-                  spellCheck={false}
-                  className="mt-1 block min-h-11 w-full min-w-0 max-w-full overflow-x-auto rounded-lg border border-slate-700 bg-[#0b0f19] px-3 py-2 font-mono text-sm text-slate-100 placeholder:text-slate-600"
+                  aria-invalid={Boolean(tokenErrors.name)}
+                  className="mt-1 block min-h-11 w-full min-w-0 rounded-lg border border-slate-700 bg-[#0b0f19] px-3 py-2 text-sm text-slate-100 placeholder:text-slate-600"
+                  placeholder="Stolla Member #1"
                 />
-                <p id="token-uri-help" className="mt-1 text-xs text-slate-500">
-                  Use an IPFS URI such as ipfs://collection/member.json. Long
-                  URIs scroll within the field.
+                <p id="token-name-help" className="mt-1 text-xs text-slate-500">
+                  Stored as the SEP-0050 <code className="font-mono">name</code>.
+                  Maximum {TOKEN_METADATA_LIMITS.nameBytes} UTF-8 bytes.
                 </p>
-                {tokenUriError && (
-                  <p
-                    id="token-uri-error"
-                    role="alert"
-                    className="mt-1 text-xs text-rose-300"
-                  >
-                    {tokenUriError}
+                {tokenErrors.name && (
+                  <p id="token-name-error" role="alert" className="mt-1 text-xs text-rose-300">
+                    {tokenErrors.name}
                   </p>
                 )}
               </div>
+              <div>
+                <label
+                  htmlFor="token-description"
+                  className="block break-words text-sm text-slate-400"
+                >
+                  Description{" "}
+                  <span className="text-slate-500">(required)</span>
+                </label>
+                <textarea
+                  id="token-description"
+                  value={tokenDescription}
+                  onChange={(e) =>
+                    editTokenField(() => {
+                      setTokenDescription(e.target.value);
+                      setTokenErrors((current) => ({
+                        ...current,
+                        description: undefined,
+                      }));
+                    })
+                  }
+                  required
+                  rows={3}
+                  aria-describedby={`token-description-help${
+                    tokenErrors.description ? " token-description-error" : ""
+                  }`}
+                  aria-invalid={Boolean(tokenErrors.description)}
+                  className="mt-1 block w-full min-w-0 resize-y rounded-lg border border-slate-700 bg-[#0b0f19] px-3 py-2 text-sm text-slate-100 placeholder:text-slate-600"
+                  placeholder="Community membership NFT"
+                />
+                <p id="token-description-help" className="mt-1 text-xs text-slate-500">
+                  Maximum {TOKEN_METADATA_LIMITS.descriptionBytes} UTF-8 bytes.
+                </p>
+                {tokenErrors.description && (
+                  <p
+                    id="token-description-error"
+                    role="alert"
+                    className="mt-1 text-xs text-rose-300"
+                  >
+                    {tokenErrors.description}
+                  </p>
+                )}
+              </div>
+              <div>
+                <label
+                  htmlFor="token-image"
+                  className="block break-words text-sm text-slate-400"
+                >
+                  Image <span className="text-slate-500">(optional)</span>
+                </label>
+                <input
+                  id="token-image"
+                  type="file"
+                  accept={IMAGE_ACCEPT}
+                  onChange={updateTokenImage}
+                  aria-describedby={`token-image-help${
+                    tokenImageError ? " token-image-error" : ""
+                  }`}
+                  aria-invalid={Boolean(tokenImageError)}
+                  className="mt-1 block w-full min-w-0 text-sm text-slate-300 file:mr-3 file:min-h-11 file:rounded-lg file:border file:border-slate-700 file:bg-[#0b0f19] file:px-4 file:py-2 file:text-sm file:font-medium file:text-slate-200"
+                />
+                <p id="token-image-help" className="mt-1 text-xs text-slate-500">
+                  {tokenImage
+                    ? `Selected ${tokenImage.name} (${formatBytes(tokenImage.size)}).`
+                    : `PNG, JPEG, WebP, GIF, or SVG up to ${formatBytes(IPFS_UPLOAD_LIMITS.imageMaxBytes)}.`}{" "}
+                  Stolla pins the image and the metadata document to IPFS; you
+                  do not need to host anything or paste a URI.
+                </p>
+                {tokenImageError && (
+                  <p id="token-image-error" role="alert" className="mt-1 text-xs text-rose-300">
+                    {tokenImageError}
+                  </p>
+                )}
+              </div>
+              {pinState.kind === "pinning" && (
+                <LiveStatus className="rounded-lg border border-slate-700 bg-[#0b0f19] p-3 text-sm text-slate-300">
+                  {pinState.step === "image"
+                    ? "Uploading the image to IPFS…"
+                    : "Pinning the membership metadata to IPFS…"}
+                </LiveStatus>
+              )}
+              {pinState.kind === "error" && (
+                <LiveStatus
+                  tone="error"
+                  className="rounded-lg border border-rose-800/70 bg-rose-950/30 p-3 text-sm text-rose-200"
+                >
+                  Metadata upload failed: {pinState.message} Your fields are
+                  preserved.
+                  {pinState.retryable && (
+                    <AppButton
+                      tone="danger"
+                      size="sm"
+                      onClick={() => void pinTokenMetadata()}
+                      className="mt-2 block"
+                    >
+                      Retry upload
+                    </AppButton>
+                  )}
+                </LiveStatus>
+              )}
+              {publishedToken && (
+                <LiveStatus className="break-all rounded-lg border border-emerald-800/70 bg-emerald-950/30 p-3 font-mono text-xs text-emerald-200 [overflow-wrap:anywhere]">
+                  Metadata pinned. token_uri: {publishedToken.tokenUri}
+                </LiveStatus>
+              )}
               <AppButton
                 tone="primary"
                 onClick={() => void handleMint()}
                 disabled={
                   !address ||
+                  !tokenDraftValid ||
+                  pinState.kind === "pinning" ||
+                  pinState.kind === "error" ||
                   mintLifecycle.isInFlight ||
                   delegationLifecycle.isInFlight
                 }
                 className="w-full sm:w-auto"
               >
-                {mintLifecycle.isInFlight ? "Mint in progress…" : "Mint NFT"}
+                {pinState.kind === "pinning"
+                  ? "Uploading metadata…"
+                  : mintLifecycle.isInFlight
+                    ? "Mint in progress…"
+                    : "Mint NFT"}
               </AppButton>
               <TransactionLifecycleStatus
                 stage={mintLifecycle.stage}

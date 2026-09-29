@@ -1,11 +1,20 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 
+import { IpfsPinError } from "@/lib/ipfs/pin";
+
 const mocks = vi.hoisted(() => ({
   useWallet: vi.fn(),
   createNftClient: vi.fn(),
   createReadOnlyNftClient: vi.fn(),
   runCommunityRefresh: vi.fn(),
+  getE2EBridge: vi.fn(),
+  pinFile: vi.fn(),
+  pinJson: vi.fn(),
+}));
+
+vi.mock("@/lib/e2eMock", () => ({
+  getE2EBridge: mocks.getE2EBridge,
 }));
 
 vi.mock("@/context/WalletProvider", () => ({
@@ -28,6 +37,22 @@ vi.mock("@/app/(app)/community/community-data.mjs", () => ({
 
 import CommunityPage from "@/app/(app)/community/page";
 
+/** Fills the SEP-0050 authoring fields; there is no URI input to fill. */
+function fillMembership(name = "Stolla Member #1", description = "Community membership NFT") {
+  fireEvent.change(screen.getByLabelText(/Display name/i), {
+    target: { value: name },
+  });
+  fireEvent.change(screen.getByLabelText(/^Description/i), {
+    target: { value: description },
+  });
+}
+
+function selectImage(file: File) {
+  const input = screen.getByLabelText(/^Image/i) as HTMLInputElement;
+  Object.defineProperty(input, "files", { value: [file], configurable: true });
+  fireEvent.change(input);
+}
+
 function deferred<T>() {
   let resolve!: (value: T) => void;
   let reject!: (reason?: unknown) => void;
@@ -42,6 +67,19 @@ describe("CommunityPage mint lifecycle", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     window.history.replaceState({}, "", "/community");
+    mocks.pinFile.mockImplementation(async (file: File) => ({
+      cid: "bafyimage",
+      uri: "ipfs://bafyimage",
+      size: file.size,
+    }));
+    mocks.pinJson.mockImplementation(async (bytes: Uint8Array) => ({
+      cid: "bafytoken",
+      uri: "ipfs://bafytoken",
+      size: bytes.length,
+    }));
+    mocks.getE2EBridge.mockReturnValue({
+      pin: { pinFile: mocks.pinFile, pinJson: mocks.pinJson },
+    });
     mocks.useWallet.mockReturnValue({
       address: "GWALLET",
       signTransaction: vi.fn(),
@@ -85,9 +123,7 @@ describe("CommunityPage mint lifecycle", () => {
     fireEvent.change(await screen.findByLabelText(/Recipient address/i), {
       target: { value: "GRECIPIENT" },
     });
-    fireEvent.change(screen.getByLabelText(/IPFS metadata URI/i), {
-      target: { value: "ipfs://meta" },
-    });
+    fillMembership();
 
     const button = screen.getByRole("button", { name: "Mint NFT" });
     fireEvent.click(button);
@@ -138,9 +174,7 @@ describe("CommunityPage mint lifecycle", () => {
     fireEvent.change(await screen.findByLabelText(/Recipient address/i), {
       target: { value: "GRECIPIENT" },
     });
-    fireEvent.change(screen.getByLabelText(/IPFS metadata URI/i), {
-      target: { value: "ipfs://meta" },
-    });
+    fillMembership();
 
     const button = screen.getByRole("button", { name: "Mint NFT" });
     fireEvent.click(button);
@@ -150,9 +184,7 @@ describe("CommunityPage mint lifecycle", () => {
     expect(screen.getByLabelText(/Recipient address/i)).toHaveValue(
       "GRECIPIENT",
     );
-    expect(screen.getByLabelText(/IPFS metadata URI/i)).toHaveValue(
-      "ipfs://meta",
-    );
+    expect(screen.getByLabelText(/Display name/i)).toHaveValue("Stolla Member #1");
     await waitFor(() => expect(button).not.toBeDisabled());
 
     fireEvent.click(button);
@@ -178,29 +210,44 @@ describe("CommunityPage mint lifecycle", () => {
     expect(mint).not.toHaveBeenCalled();
   });
 
-  it("shows validation errors for missing recipient and token URI", async () => {
+  it("has no URI input, disables mint until the authoring fields are valid, and never pins early", async () => {
     const mint = vi.fn();
     mocks.createNftClient.mockReturnValue({ mint });
 
     render(<CommunityPage />);
-    fireEvent.change(await screen.findByLabelText(/Recipient address/i), {
-      target: { value: "" },
-    });
-    fireEvent.change(screen.getByLabelText(/IPFS metadata URI/i), {
-      target: { value: "" },
-    });
-    fireEvent.click(screen.getByRole("button", { name: "Mint NFT" }));
+    const button = await screen.findByRole("button", { name: "Mint NFT" });
+    expect(screen.queryByLabelText(/metadata URI/i)).not.toBeInTheDocument();
+    expect(document.querySelector('input[value^="ipfs://"]')).toBeNull();
+    expect(button).toBeDisabled();
 
+    fillMembership("x".repeat(65), "ok");
+    expect(button).toBeDisabled();
+
+    fillMembership();
+    expect(button).toBeEnabled();
+    fireEvent.click(button);
     expect(
       await screen.findByText("Recipient address is required."),
     ).toBeInTheDocument();
-    expect(
-      screen.getByText("IPFS metadata URI is required."),
-    ).toBeInTheDocument();
+    expect(mocks.pinJson).not.toHaveBeenCalled();
     expect(mint).not.toHaveBeenCalled();
   });
 
-  it("calls mint with the exact recipient and token URI", async () => {
+  it("rejects a bad image before any pin request", async () => {
+    render(<CommunityPage />);
+    await screen.findByRole("button", { name: "Mint NFT" });
+    fillMembership();
+    selectImage(new File(["x"], "member.bmp", { type: "image/bmp" }));
+
+    expect(screen.getByText("Use a PNG, JPEG, WebP, GIF, or SVG image.")).toHaveAttribute(
+      "role",
+      "alert",
+    );
+    expect(screen.getByRole("button", { name: "Mint NFT" })).toBeDisabled();
+    expect(mocks.pinFile).not.toHaveBeenCalled();
+  });
+
+  it("pins image then document and calls mint with the generated token_uri only", async () => {
     const mint = vi.fn().mockResolvedValue({
       sign: async () => undefined,
       send: async () => ({ result: 3 }),
@@ -211,17 +258,96 @@ describe("CommunityPage mint lifecycle", () => {
     fireEvent.change(await screen.findByLabelText(/Recipient address/i), {
       target: { value: "GRECIPIENT" },
     });
-    fireEvent.change(screen.getByLabelText(/IPFS metadata URI/i), {
-      target: { value: "ipfs://collection/member.json" },
-    });
+    fillMembership();
+    selectImage(new File(["png"], "member.png", { type: "image/png" }));
     fireEvent.click(screen.getByRole("button", { name: "Mint NFT" }));
 
     await waitFor(() => {
       expect(mint).toHaveBeenCalledWith({
         to: "GRECIPIENT",
-        token_uri: "ipfs://collection/member.json",
+        token_uri: "ipfs://bafytoken",
       });
     });
+    expect(mocks.pinFile).toHaveBeenCalledTimes(1);
+    expect(mocks.pinFile.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.pinJson.mock.invocationCallOrder[0],
+    );
+    const pinnedJson = new TextDecoder().decode(mocks.pinJson.mock.calls[0][0]);
+    expect(pinnedJson).toBe(
+      '{"name":"Stolla Member #1","description":"Community membership NFT","image":"ipfs://bafyimage","attributes":[]}',
+    );
+    expect(screen.getByText(/token_uri: ipfs:\/\/bafytoken/)).toBeInTheDocument();
+  });
+
+  it("keeps mint disabled with a retryable error when pinning fails, then mints after retry", async () => {
+    const mint = vi.fn().mockResolvedValue({
+      sign: async () => undefined,
+      send: async () => ({ result: 4 }),
+    });
+    mocks.createNftClient.mockReturnValue({ mint });
+    mocks.pinJson.mockRejectedValueOnce(
+      new IpfsPinError("provider", "Pinata is unavailable."),
+    );
+
+    render(<CommunityPage />);
+    fireEvent.change(await screen.findByLabelText(/Recipient address/i), {
+      target: { value: "GRECIPIENT" },
+    });
+    fillMembership();
+    fireEvent.click(screen.getByRole("button", { name: "Mint NFT" }));
+
+    expect(
+      await screen.findByText(/Metadata upload failed: Pinata is unavailable\./),
+    ).toHaveAttribute("role", "alert");
+    expect(screen.getByRole("button", { name: "Mint NFT" })).toBeDisabled();
+    expect(screen.getByLabelText(/Display name/i)).toHaveValue("Stolla Member #1");
+    expect(mint).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Retry upload" }));
+    expect(await screen.findByText(/token_uri: ipfs:\/\/bafytoken/)).toBeInTheDocument();
+    const button = screen.getByRole("button", { name: "Mint NFT" });
+    await waitFor(() => expect(button).toBeEnabled());
+    fireEvent.click(button);
+    await waitFor(() =>
+      expect(mint).toHaveBeenCalledWith({ to: "GRECIPIENT", token_uri: "ipfs://bafytoken" }),
+    );
+    expect(mocks.pinJson).toHaveBeenCalledTimes(2);
+  });
+
+  it("reports a missing PINATA_JWT as a non-retryable configuration error", async () => {
+    mocks.createNftClient.mockReturnValue({ mint: vi.fn() });
+    mocks.pinJson.mockRejectedValue(
+      new IpfsPinError("config", "Set PINATA_JWT before minting."),
+    );
+
+    render(<CommunityPage />);
+    fireEvent.change(await screen.findByLabelText(/Recipient address/i), {
+      target: { value: "GRECIPIENT" },
+    });
+    fillMembership();
+    fireEvent.click(screen.getByRole("button", { name: "Mint NFT" }));
+
+    expect(await screen.findByText(/Set PINATA_JWT/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Retry upload" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Mint NFT" })).toBeDisabled();
+  });
+
+  it("drops the generated token_uri when a field is edited after pinning", async () => {
+    const mint = vi.fn().mockRejectedValue(new Error("simulation failed: not the owner"));
+    mocks.createNftClient.mockReturnValue({ mint });
+
+    render(<CommunityPage />);
+    fireEvent.change(await screen.findByLabelText(/Recipient address/i), {
+      target: { value: "GRECIPIENT" },
+    });
+    fillMembership();
+    fireEvent.click(screen.getByRole("button", { name: "Mint NFT" }));
+    expect(await screen.findByText(/token_uri: ipfs:\/\/bafytoken/)).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText(/Display name/i), {
+      target: { value: "Renamed" },
+    });
+    expect(screen.queryByText(/token_uri:/)).not.toBeInTheDocument();
   });
 
   it("shows simulation failure and preserves form input", async () => {
@@ -234,9 +360,7 @@ describe("CommunityPage mint lifecycle", () => {
     fireEvent.change(await screen.findByLabelText(/Recipient address/i), {
       target: { value: "GRECIPIENT" },
     });
-    fireEvent.change(screen.getByLabelText(/IPFS metadata URI/i), {
-      target: { value: "ipfs://meta" },
-    });
+    fillMembership();
     fireEvent.click(screen.getByRole("button", { name: "Mint NFT" }));
 
     expect(
@@ -245,9 +369,7 @@ describe("CommunityPage mint lifecycle", () => {
     expect(screen.getByLabelText(/Recipient address/i)).toHaveValue(
       "GRECIPIENT",
     );
-    expect(screen.getByLabelText(/IPFS metadata URI/i)).toHaveValue(
-      "ipfs://meta",
-    );
+    expect(screen.getByLabelText(/Display name/i)).toHaveValue("Stolla Member #1");
   });
 
   it("shows submission failure and preserves form input", async () => {
@@ -263,9 +385,7 @@ describe("CommunityPage mint lifecycle", () => {
     fireEvent.change(await screen.findByLabelText(/Recipient address/i), {
       target: { value: "GKEEP" },
     });
-    fireEvent.change(screen.getByLabelText(/IPFS metadata URI/i), {
-      target: { value: "ipfs://keep" },
-    });
+    fillMembership();
     fireEvent.click(screen.getByRole("button", { name: "Mint NFT" }));
 
     expect(
@@ -273,8 +393,6 @@ describe("CommunityPage mint lifecycle", () => {
         .length,
     ).toBeGreaterThanOrEqual(1);
     expect(screen.getByLabelText(/Recipient address/i)).toHaveValue("GKEEP");
-    expect(screen.getByLabelText(/IPFS metadata URI/i)).toHaveValue(
-      "ipfs://keep",
-    );
+    expect(screen.getByLabelText(/Display name/i)).toHaveValue("Stolla Member #1");
   });
 });
