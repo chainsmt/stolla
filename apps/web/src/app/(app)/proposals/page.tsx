@@ -13,12 +13,21 @@ import {
 import { contractIds } from "@/lib/stellar";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { ProposalSummaryCard } from "@/components/ProposalSummaryCard";
+import { ProposalMetadataFields } from "@/components/proposal/ProposalMetadataFields";
 import { AppButton } from "@/components/ui/AppButton";
 import { truncateEnd } from "@/lib/truncate";
 import { LiveStatus } from "@/components/ui/LiveStatus";
 import { TransactionLifecycleStatus } from "@/components/TransactionLifecycleStatus";
 import { DiscoveryFreshnessBanner } from "@/components/DiscoveryFreshnessBanner";
 import { useOperationLifecycle } from "@/hooks/useOperationLifecycle";
+import {
+  hasProposalMetadataErrors,
+  serializeProposalMetadata,
+  validateProposalMetadataDraft,
+  type ProposalMetadataDraft,
+  type ProposalMetadataErrors,
+  type ProposalMetadataField,
+} from "@/lib/proposal-metadata";
 
 type ActionStatus = {
   message: string;
@@ -29,10 +38,20 @@ const ALL_FILTER = "all" as const;
 const LOAD_MORE_PAGE_SIZE = 10;
 type StateFilter = typeof ALL_FILTER | ProposalState;
 
+const EMPTY_METADATA_DRAFT: ProposalMetadataDraft = {
+  title: "",
+  summary: "",
+  body: "",
+  discussionUrl: null,
+};
+
 export default function ProposalsPage() {
   const { address, signTransaction } = useWallet();
-  const [description, setDescription] = useState("");
-  const [descriptionError, setDescriptionError] = useState<string | null>(null);
+  const [metadataDraft, setMetadataDraft] =
+    useState<ProposalMetadataDraft>(EMPTY_METADATA_DRAFT);
+  const [metadataErrors, setMetadataErrors] = useState<ProposalMetadataErrors>(
+    {},
+  );
   const [status, setStatus] = useState<ActionStatus | null>(null);
   const proposeLifecycle = useOperationLifecycle();
   const [stateFilter, setStateFilter] = useState<StateFilter>(ALL_FILTER);
@@ -181,20 +200,42 @@ export default function ProposalsPage() {
   }, [availableStates, stateFilter]);
 
 
+  function updateMetadataField(field: ProposalMetadataField, value: string) {
+    setMetadataDraft((current) => ({
+      ...current,
+      [field]: field === "discussionUrl" ? value || null : value,
+    }));
+    setMetadataErrors((current) => {
+      if (!current[field] && !current.envelope) return current;
+      const next = { ...current };
+      delete next[field];
+      delete next.envelope;
+      return next;
+    });
+  }
+
   async function handleCreateProposal() {
     if (!address) {
       setStatus({ message: "Connect your wallet first.", tone: "error" });
       return;
     }
-    if (!description.trim()) {
-      setDescriptionError("Proposal description is required.");
+
+    const draftSnapshot: ProposalMetadataDraft = {
+      title: metadataDraft.title,
+      summary: metadataDraft.summary,
+      body: metadataDraft.body,
+      discussionUrl: metadataDraft.discussionUrl,
+    };
+    const nextErrors = validateProposalMetadataDraft(draftSnapshot);
+    if (hasProposalMetadataErrors(nextErrors)) {
+      setMetadataErrors(nextErrors);
       setStatus(null);
       return;
     }
     if (proposeLifecycle.isInFlight) return;
 
-    const descriptionSnapshot = description.trim();
-    setDescriptionError(null);
+    const descriptionSnapshot = serializeProposalMetadata(draftSnapshot);
+    setMetadataErrors({});
     setStatus(null);
     proposeLifecycle.reset();
 
@@ -213,8 +254,8 @@ export default function ProposalsPage() {
     });
 
     if (!result.ok) {
-      // Preserve entered description on rejection / RPC failure.
-      setDescription(descriptionSnapshot);
+      // Preserve entered metadata on rejection / RPC failure.
+      setMetadataDraft(draftSnapshot);
       return;
     }
 
@@ -239,7 +280,7 @@ export default function ProposalsPage() {
       });
     }
 
-    setDescription("");
+    setMetadataDraft(EMPTY_METADATA_DRAFT);
     // Discovery delay is indexing lag, not a transaction failure.
     const refreshed = await refresh();
     if (!refreshed) {
@@ -271,44 +312,16 @@ export default function ProposalsPage() {
       {contractsConfigured && (
         <section className="mt-6 min-w-0 rounded-xl border border-slate-800 bg-[#151b2b] p-4 sm:p-5">
           <h2 className="font-semibold text-slate-100">Create proposal</h2>
-          <label
-            htmlFor="proposal-description"
-            className="mt-3 block text-sm text-slate-400"
-          >
-            Proposal description{" "}
-            <span className="text-slate-500">(required)</span>
-          </label>
-          <textarea
-            id="proposal-description"
-            value={description}
-            onChange={(e) => {
-              setDescription(e.target.value);
-              setDescriptionError(null);
-            }}
-            rows={3}
-            required
-            aria-describedby={`proposal-description-help${
-              descriptionError ? " proposal-description-error" : ""
-            }`}
-            aria-invalid={Boolean(descriptionError)}
-            className="mt-1 box-border w-full min-w-0 resize-y rounded-lg border border-slate-700 bg-[#0b0f19] px-3 py-2 text-sm text-slate-100 placeholder:text-slate-600"
-            placeholder="Describe the community decision..."
-          />
-          <p
-            id="proposal-description-help"
-            className="mt-1 text-xs text-slate-500"
-          >
-            Summarize the decision and intended action recorded with the proposal.
+          <p className="mt-1 text-sm text-slate-400">
+            Structured Proposal Metadata v1 is serialized into the on-chain
+            description. Older free-text proposals remain readable on detail
+            pages.
           </p>
-          {descriptionError && (
-            <p
-              id="proposal-description-error"
-              role="alert"
-              className="mt-1 text-xs text-rose-300"
-            >
-              {descriptionError}
-            </p>
-          )}
+          <ProposalMetadataFields
+            value={metadataDraft}
+            errors={metadataErrors}
+            onChange={updateMetadataField}
+          />
           <AppButton
             tone="primary"
             onClick={() => void handleCreateProposal()}
