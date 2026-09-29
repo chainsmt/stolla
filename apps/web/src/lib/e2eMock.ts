@@ -1,5 +1,9 @@
 import type { CommunityDeploymentAdapter } from "@/lib/community/deployment";
-import type { CommunityDetailResult, CommunityRegistryPage } from "@/lib/community/types";
+import type {
+  CommunityDetailResult,
+  CommunityRegistry,
+  CommunityRegistryPage,
+} from "@/lib/community/types";
 import type { IpfsPinClient } from "@/lib/ipfs/pin";
 
 export type E2EProposal = {
@@ -65,4 +69,19 @@ export function e2eGetCommunity(id: string): CommunityDetailResult | null {
     (candidate) => candidate.record.id.toLowerCase() === id.toLowerCase(),
   );
   return community ? { status: "found", community } : { status: "not-found" };
+}
+
+/** Registry adapter for E2E fixtures; returns null when mocks are off. */
+export function getE2ECommunityRegistry(): CommunityRegistry | null {
+  if (!getE2EBridge()?.communities) return null;
+  return {
+    list: async (cursor, limit) =>
+      e2eListCommunities(cursor, limit) ?? {
+        communities: [],
+        nextCursor: null,
+        malformedRecords: 0,
+      },
+    get: async (id) =>
+      e2eGetCommunity(id) ?? { status: "not-found" },
+  };
 }

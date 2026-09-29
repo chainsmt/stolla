@@ -6,8 +6,8 @@ import {
   atlasCommunity,
   beaconCommunity,
   multiCommunityRegistry,
-  createGovernorReaderFactory,
-} from "@/test-support/stellar";
+} from "@/test/fixtures/communities";
+import { createGovernorReaderFactory } from "@/test-support/stellar";
 
 describe("CommunityProposalDetailView", () => {
   it("scopes an identical proposal id to the routed community's own Governor", async () => {

@@ -7,7 +7,7 @@ import {
   beaconCommunity,
   driftwoodCommunity,
   multiCommunityRegistry,
-} from "@/test-support/stellar";
+} from "@/test/fixtures/communities";
 
 const atlasName = atlasCommunity.metadata!.name;
 const beaconName = beaconCommunity.metadata!.name;
