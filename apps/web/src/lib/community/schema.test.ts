@@ -2,8 +2,10 @@ import { describe, expect, it } from "vitest";
 import {
   DEFAULT_GOVERNANCE_DRAFT,
   parseCommunityMetadata,
-  validateCommunityMetadataDraft,
+  validateAuthoringDraft,
+  validateDeploymentPayload,
   validateGovernanceDraft,
+  type CommunityDeploymentPayload,
   type CommunityMetadataDraft,
 } from "./schema";
 
@@ -11,28 +13,30 @@ const VALID_DRAFT: CommunityMetadataDraft = {
   name: "Builders Guild",
   symbol: "BUILD",
   description: "A community for public-goods builders.",
-  collectionUri: "ipfs://bafy/collection.json",
-  metadataUri: "https://builders.example/community.json",
-  logo: "",
   externalLinkLabel: "",
   externalLinkUrl: "",
 };
 
-describe("community metadata schema", () => {
-  it("accepts valid first-step input", () => {
-    expect(validateCommunityMetadataDraft(VALID_DRAFT)).toEqual({});
+const VALID_PAYLOAD: CommunityDeploymentPayload = {
+  collectionUri: "ipfs://bafycollection",
+  metadataUri: "ipfs://bafycommunity",
+  metadataHash: "ab".repeat(32),
+};
+
+describe("community authoring draft (validateAuthoringDraft)", () => {
+  it("accepts valid first-step input without any URI strings", () => {
+    expect(validateAuthoringDraft(VALID_DRAFT)).toEqual({});
+    expect(Object.keys(VALID_DRAFT)).not.toContain("collectionUri");
+    expect(Object.keys(VALID_DRAFT)).not.toContain("metadataUri");
   });
 
   it("rejects values outside every documented length or format class", () => {
     expect(
-      validateCommunityMetadataDraft({
+      validateAuthoringDraft({
         ...VALID_DRAFT,
         name: "x".repeat(65),
         symbol: "lowercase",
         description: "x".repeat(2_001),
-        collectionUri: "ftp://example.test/collection.json",
-        metadataUri: `https://example.test/${"x".repeat(257)}`,
-        logo: "http://example.test/logo.png",
         externalLinkLabel: "x".repeat(33),
         externalLinkUrl: "ipfs://not-an-external-link",
       }),
@@ -40,16 +44,54 @@ describe("community metadata schema", () => {
       name: "Use at most 64 UTF-8 bytes and no control characters.",
       symbol: "Use 1–12 uppercase letters or numbers.",
       description: "Use at most 2,000 UTF-8 bytes.",
-      collectionUri:
-        "Use a valid ipfs:// or https:// URI of at most 256 bytes.",
-      metadataUri:
-        "Use a valid ipfs:// or https:// URI of at most 256 bytes.",
-      logo: "Use a valid ipfs:// or https:// URI of at most 256 bytes.",
       externalLinkLabel:
         "Use at most 32 UTF-8 bytes and no control characters.",
       externalLinkUrl: "Use a valid https:// URL of at most 256 bytes.",
     });
   });
+});
+
+describe("community deployment payload (validateDeploymentPayload)", () => {
+  it("accepts a generated payload with ipfs URIs and a non-zero hash", () => {
+    expect(validateDeploymentPayload(VALID_PAYLOAD)).toEqual({});
+    expect(
+      validateDeploymentPayload({ ...VALID_PAYLOAD, logoUri: "ipfs://bafylogo" }),
+    ).toEqual({});
+  });
+
+  it("fails closed when the pin pipeline produced nothing", () => {
+    const errors = validateDeploymentPayload(null);
+    expect(Object.keys(errors)).toEqual([
+      "collectionUri",
+      "metadataUri",
+      "metadataHash",
+    ]);
+  });
+
+  it("rejects empty URIs, zero or malformed hashes, and bad logo URIs", () => {
+    expect(
+      validateDeploymentPayload({
+        collectionUri: "",
+        metadataUri: "ftp://nope",
+        metadataHash: "0".repeat(64),
+        logoUri: "http://insecure.example/logo.png",
+      }),
+    ).toEqual({
+      collectionUri: "The generated collection URI is missing or invalid.",
+      metadataUri: "The generated metadata URI is missing or invalid.",
+      metadataHash: "The metadata hash must be a non-zero 32-byte SHA-256 digest.",
+      logoUri: "The generated logo URI is invalid.",
+    });
+    expect(
+      validateDeploymentPayload({ ...VALID_PAYLOAD, metadataHash: "AB".repeat(32) }),
+    ).toHaveProperty("metadataHash");
+    expect(
+      validateDeploymentPayload({ ...VALID_PAYLOAD, metadataHash: "ab".repeat(31) }),
+    ).toHaveProperty("metadataHash");
+  });
+});
+
+describe("community metadata schema", () => {
 
   it("parses version-1 metadata and rejects unknown or mismatched fields", () => {
     const metadata = {

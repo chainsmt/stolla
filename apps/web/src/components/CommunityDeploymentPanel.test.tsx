@@ -40,11 +40,13 @@ const props = {
     name: "Builders",
     symbol: "BUILD",
     description: "Builders",
-    collectionUri: "ipfs://collection",
-    metadataUri: "https://example.test/community.json",
-    logo: "",
     externalLinkLabel: "",
     externalLinkUrl: "",
+  },
+  payload: {
+    collectionUri: "ipfs://collection",
+    metadataUri: "ipfs://community",
+    metadataHash: "12".repeat(32),
   },
   governance: {
     proposalThreshold: "1",

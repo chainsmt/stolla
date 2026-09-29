@@ -48,6 +48,10 @@ NEXT_PUBLIC_NFT_CONTRACT_ID=<community-nft-contract-id>
 NEXT_PUBLIC_GOVERNOR_CONTRACT_ID=<governor-contract-id>
 # Optional gateway used to resolve ipfs:// community metadata and logos.
 NEXT_PUBLIC_IPFS_GATEWAY_URL=https://ipfs.io/ipfs/
+# Server-only Pinata JWT. The app pins community, collection, and token
+# metadata through /api/ipfs/pin so creators never paste URIs. Never expose
+# it with a NEXT_PUBLIC_ prefix.
+PINATA_JWT=<pinata-jwt>
 # Lower ledger boundary for proposal event discovery (Governor deploy ledger).
 # Example (testnet): NEXT_PUBLIC_GOVERNOR_START_LEDGER=1500000
 NEXT_PUBLIC_GOVERNOR_START_LEDGER=<governor-deploy-ledger>
@@ -168,6 +172,7 @@ Add these environment variables in the Vercel project settings:
 | `NEXT_PUBLIC_GOVERNOR_CONTRACT_ID` | From deploy script output |
 | `NEXT_PUBLIC_GOVERNOR_START_LEDGER` | Governor deploy ledger from deploy script output |
 | `NEXT_PUBLIC_IPFS_GATEWAY_URL` | Public IPFS gateway ending in `/ipfs/` |
+| `PINATA_JWT` | Server-only Pinata JWT used by `/api/ipfs/pin` (required for create and mint) |
 
 After the first production deployment, Vercel will redeploy automatically when
 new commits are pushed to the production branch.

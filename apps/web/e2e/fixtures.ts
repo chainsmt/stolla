@@ -96,6 +96,15 @@ export async function installCreationFixtures(
         communities: [],
         proposals: {},
         diagnostics: { submissions: 0, invocations: [] },
+        pin: {
+          async pinFile(file) {
+            return { cid: "bafyfixturelogo", uri: "ipfs://bafyfixturelogo", size: file.size };
+          },
+          async pinJson(bytes, name) {
+            const cid = `bafyfixture-${name.replace(/\W+/g, "-")}`;
+            return { cid, uri: `ipfs://${cid}`, size: bytes.length };
+          },
+        },
         deployment: {
           async simulate(input) {
             if (scenario === "simulation-failure") {
@@ -107,6 +116,7 @@ export async function installCreationFixtures(
               sourceAccount: input.creator,
               networkPassphrase: input.networkPassphrase,
               metadata: input.metadata,
+              payload: input.payload,
               governance: input.governance,
             });
             return {
@@ -174,12 +184,6 @@ export async function completeWizardToReview(page: Page) {
   await page
     .getByLabel("Description (required)")
     .fill("A deterministic community creation fixture.");
-  await page
-    .getByLabel("NFT collection URI (required)")
-    .fill("https://fixtures.stolla.test/collection.json");
-  await page
-    .getByLabel("Community metadata URI (required)")
-    .fill("https://fixtures.stolla.test/community.json");
   await expect(page.getByLabel("Community name (required)")).toHaveValue(
     "Creator Guild",
   );
@@ -191,6 +195,10 @@ export async function completeWizardToReview(page: Page) {
   await expect(
     page.getByRole("heading", { name: "Review deployment inputs" }),
   ).toBeVisible();
+  // The review step pins the generated documents through the bridge's pin
+  // client; deployment stays locked until that succeeds.
+  await page.getByRole("button", { name: "Prepare metadata" }).click();
+  await expect(page.getByText(/Metadata pinned to IPFS/)).toBeVisible();
   await page
     .getByLabel(/I confirm that these metadata and governance values/)
     .check();

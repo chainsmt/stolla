@@ -1,19 +1,92 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { IpfsPinError, type IpfsPinClient } from "@/lib/ipfs/pin";
 
 const wallet = vi.hoisted(() => ({
   useWallet: vi.fn(),
+}));
+const bridge = vi.hoisted(() => ({
+  getE2EBridge: vi.fn(),
 }));
 
 vi.mock("@/context/WalletProvider", () => ({
   useWallet: wallet.useWallet,
 }));
+vi.mock("@/lib/e2eMock", () => ({
+  getE2EBridge: bridge.getE2EBridge,
+}));
 
 import CreateCommunityPage from "@/app/(app)/communities/create/page";
 import {
+  MOCK_ACCOUNT_ALICE,
   MOCK_CONTRACT_B,
   MOCK_GOVERNOR_CONTRACT_ID,
 } from "@/test-support/stellar/fixtures";
+
+const STORAGE_KEY = "stolla:community-wizard:testnet:v2";
+const TESTNET_PASSPHRASE = "Test SDF Network ; September 2015";
+
+function connectedWallet(address = MOCK_ACCOUNT_ALICE) {
+  return {
+    address,
+    walletNetwork: "testnet",
+    walletNetworkPassphrase: TESTNET_PASSPHRASE,
+    connect: vi.fn(),
+    signTransaction: vi.fn(),
+    isConnecting: false,
+  };
+}
+
+function fakePin(): IpfsPinClient & { pinFile: ReturnType<typeof vi.fn>; pinJson: ReturnType<typeof vi.fn> } {
+  return {
+    pinFile: vi.fn(async (file: File) => ({
+      cid: "bafylogo",
+      uri: "ipfs://bafylogo",
+      size: file.size,
+    })),
+    pinJson: vi.fn(async (bytes: Uint8Array, name: string) => ({
+      cid: `bafy-${name}`,
+      uri: `ipfs://bafy-${name}`,
+      size: bytes.length,
+    })),
+  };
+}
+
+function deploymentAdapter() {
+  return {
+    simulate: vi.fn(async (input: { payload: unknown; factoryId: string; creator: string; networkPassphrase: string }) => ({
+      invocation: {
+        contractId: input.factoryId,
+        method: "create_community" as const,
+        sourceAccount: input.creator,
+        networkPassphrase: input.networkPassphrase,
+        metadataHash: "12".repeat(32),
+        externalKey: "12".repeat(32),
+        args: [],
+      },
+      feeStroops: "12345678",
+      expectedRecord: {
+        id: "ab".repeat(32),
+        nftContract: MOCK_CONTRACT_B,
+        governorContract: MOCK_GOVERNOR_CONTRACT_ID,
+        creator: MOCK_ACCOUNT_ALICE,
+        communityOwner: MOCK_ACCOUNT_ALICE,
+        createdAtLedger: 10,
+        creationIndex: 1,
+        metadataUri: "ipfs://bafy-community.json",
+        metadataHash: "12".repeat(32),
+        metadataSchemaVersion: 1 as const,
+      },
+      sequence: "2",
+      expiresAt: 999,
+      prepared: {},
+    })),
+    signAndSubmit: vi.fn(),
+    transactionStatus: vi.fn(),
+    verifyRegistry: vi.fn(),
+    readFactoryOwner: vi.fn(async () => MOCK_ACCOUNT_ALICE),
+  };
+}
 
 function enterValidMetadata() {
   fireEvent.change(screen.getByLabelText(/Community name/), {
@@ -22,22 +95,36 @@ function enterValidMetadata() {
   fireEvent.change(screen.getByLabelText(/NFT symbol/), {
     target: { value: "BUILD" },
   });
-  fireEvent.change(screen.getByLabelText(/Description/), {
+  fireEvent.change(screen.getByLabelText(/^Description/), {
     target: { value: "A community for public-goods builders." },
-  });
-  fireEvent.change(screen.getByLabelText(/NFT collection URI/), {
-    target: { value: "ipfs://bafy/collection.json" },
-  });
-  fireEvent.change(screen.getByLabelText(/Community metadata URI/), {
-    target: { value: "https://builders.example/community.json" },
   });
 }
 
+function selectLogo(file: File) {
+  const input = screen.getByLabelText("Logo image") as HTMLInputElement;
+  Object.defineProperty(input, "files", { value: [file], configurable: true });
+  fireEvent.change(input);
+}
+
+function goToReview() {
+  fireEvent.click(screen.getByRole("button", { name: "Continue to governance" }));
+  fireEvent.click(screen.getByRole("button", { name: "Review community" }));
+}
+
+const simulateButton = () =>
+  screen.getByRole("button", { name: /Simulate deployment|Rebuild simulation/ });
+
 describe("CreateCommunityPage", () => {
+  let pin: ReturnType<typeof fakePin>;
+  let deployment: ReturnType<typeof deploymentAdapter>;
+
   beforeEach(() => {
     vi.restoreAllMocks();
     sessionStorage.clear();
     vi.spyOn(window, "confirm").mockReturnValue(true);
+    pin = fakePin();
+    deployment = deploymentAdapter();
+    bridge.getE2EBridge.mockReturnValue({ pin, deployment });
     wallet.useWallet.mockReturnValue({
       address: null,
       walletNetwork: null,
@@ -48,8 +135,14 @@ describe("CreateCommunityPage", () => {
     });
   });
 
-  it("announces inline errors for every missing required metadata field", async () => {
+  it("has no URI inputs and announces inline errors only for authoring fields", () => {
     render(<CreateCommunityPage />);
+
+    expect(screen.queryByLabelText(/collection URI/i)).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/metadata URI/i)).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/Logo URI/i)).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Logo image")).toHaveAttribute("type", "file");
+
     fireEvent.click(
       screen.getByRole("button", { name: "Continue to governance" }),
     );
@@ -62,22 +155,17 @@ describe("CreateCommunityPage", () => {
     expect(
       screen.getByText("Enter a public community description."),
     ).toBeInTheDocument();
-    expect(screen.getByText("Enter the NFT collection URI.")).toBeInTheDocument();
-    expect(
-      screen.getByText("Enter the community metadata URI."),
-    ).toBeInTheDocument();
+    expect(screen.queryByText(/Enter the NFT collection URI/)).not.toBeInTheDocument();
     expect(screen.getByLabelText(/Community name/)).toHaveAttribute(
       "aria-invalid",
       "true",
     );
   });
 
-  it("rejects invalid public URLs and incomplete optional links", () => {
+  it("rejects a disallowed logo file and incomplete optional links before pinning", () => {
     render(<CreateCommunityPage />);
     enterValidMetadata();
-    fireEvent.change(screen.getByLabelText(/Logo URI/), {
-      target: { value: "http://insecure.example/logo.png" },
-    });
+    selectLogo(new File(["x"], "logo.bmp", { type: "image/bmp" }));
     fireEvent.change(screen.getByLabelText("Link label"), {
       target: { value: "Chat" },
     });
@@ -86,18 +174,18 @@ describe("CreateCommunityPage", () => {
       screen.getByRole("button", { name: "Continue to governance" }),
     );
 
-    expect(
-      screen.getByText(
-        "Use a valid ipfs:// or https:// URI of at most 256 bytes.",
-      ),
-    ).toBeInTheDocument();
+    expect(screen.getByText("Use a PNG, JPEG, WebP, GIF, or SVG image.")).toHaveAttribute(
+      "role",
+      "alert",
+    );
     expect(screen.getByText("Enter the HTTPS link URL.")).toBeInTheDocument();
     expect(
       screen.queryByText("Metadata validated and saved for this wizard session."),
     ).not.toBeInTheDocument();
+    expect(pin.pinFile).not.toHaveBeenCalled();
   });
 
-  it("advances valid metadata without a transaction and preserves it on back", () => {
+  it("advances valid metadata without any URI strings and preserves it on back", () => {
     render(<CreateCommunityPage />);
     enterValidMetadata();
 
@@ -115,19 +203,16 @@ describe("CreateCommunityPage", () => {
     expect(screen.getByLabelText(/Community name/)).toHaveValue(
       "Builders Guild",
     );
-    expect(screen.getByLabelText(/Community metadata URI/)).toHaveValue(
-      "https://builders.example/community.json",
-    );
+    expect(screen.getByLabelText(/NFT symbol/)).toHaveValue("BUILD");
   });
 
   it("restores metadata for the current wizard session after remount", async () => {
     const { unmount } = render(<CreateCommunityPage />);
     enterValidMetadata();
     await waitFor(() =>
-      expect(
-        sessionStorage.getItem("stolla:community-wizard:testnet:v1"),
-      ).toContain("Builders Guild"),
+      expect(sessionStorage.getItem(STORAGE_KEY)).toContain("Builders Guild"),
     );
+    expect(sessionStorage.getItem(STORAGE_KEY)).not.toContain("collectionUri");
     unmount();
 
     render(<CreateCommunityPage />);
@@ -137,9 +222,7 @@ describe("CreateCommunityPage", () => {
         "Builders Guild",
       ),
     );
-    expect(screen.getByLabelText(/NFT collection URI/)).toHaveValue(
-      "ipfs://bafy/collection.json",
-    );
+    expect(screen.getByLabelText(/NFT symbol/)).toHaveValue("BUILD");
   });
 
   it("rejects governance boundaries and contradictory ledger periods", () => {
@@ -167,60 +250,163 @@ describe("CreateCommunityPage", () => {
     expect(
       screen.getByText("Voting period must be greater than the voting delay."),
     ).toBeInTheDocument();
-    expect(
-      screen.queryByText("Deployment target"),
-    ).not.toBeInTheDocument();
+    expect(screen.queryByText("Deployment target")).not.toBeInTheDocument();
   });
 
-  it("preserves governance values through review edit navigation", () => {
+  it("keeps simulation locked until the documents are pinned, then passes the generated payload", async () => {
+    wallet.useWallet.mockReturnValue(connectedWallet());
     render(<CreateCommunityPage />);
     enterValidMetadata();
-    fireEvent.click(
-      screen.getByRole("button", { name: "Continue to governance" }),
-    );
-    fireEvent.change(screen.getByLabelText(/Quorum/), {
-      target: { value: "25" },
-    });
+    fireEvent.click(screen.getByRole("button", { name: "Continue to governance" }));
+    fireEvent.change(screen.getByLabelText(/Quorum/), { target: { value: "25" } });
     fireEvent.click(screen.getByRole("button", { name: "Review community" }));
 
     expect(screen.getByText("Deployment target")).toBeInTheDocument();
     expect(screen.getByText("25 NFT votes")).toBeInTheDocument();
+    await waitFor(() =>
+      expect(
+        screen.getByLabelText("Community metadata JSON preview"),
+      ).toHaveTextContent('"name":"Builders Guild"'),
+    );
+    fireEvent.click(screen.getByLabelText(/I confirm that these metadata/));
+    await waitFor(() => expect(deployment.readFactoryOwner).toHaveBeenCalled());
+    expect(simulateButton()).toBeDisabled();
     expect(
-      screen.getByRole("button", { name: "Simulate deployment" }),
-    ).toBeDisabled();
+      screen.getByText(/Pin the metadata documents above to unlock simulation/),
+    ).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "Edit governance" }));
-    expect(screen.getByLabelText(/Quorum/)).toHaveValue("25");
+    fireEvent.click(screen.getByRole("button", { name: "Prepare metadata" }));
+
+    expect(
+      await screen.findByText(/Metadata pinned to IPFS/),
+    ).toBeInTheDocument();
+    expect(pin.pinFile).not.toHaveBeenCalled();
+    expect(pin.pinJson).toHaveBeenCalledTimes(2);
+    expect(screen.getByText(/metadata_uri: ipfs:\/\/bafy-community\.json/)).toBeInTheDocument();
+    expect(screen.getByText(/collection_uri: ipfs:\/\/bafy-collection\.json/)).toBeInTheDocument();
+    const hash = screen.getByTestId("metadata-hash").textContent ?? "";
+    expect(hash).toMatch(/^[0-9a-f]{64}$/);
+
+    await waitFor(() => expect(simulateButton()).toBeEnabled());
+    fireEvent.click(simulateButton());
+    await waitFor(() => expect(deployment.simulate).toHaveBeenCalledTimes(1));
+    expect(deployment.simulate.mock.calls[0][0].payload).toEqual({
+      collectionUri: "ipfs://bafy-collection.json",
+      metadataUri: "ipfs://bafy-community.json",
+      metadataHash: hash,
+    });
+  });
+
+  it("pins the logo first and threads its URI through both documents", async () => {
+    wallet.useWallet.mockReturnValue(connectedWallet());
+    render(<CreateCommunityPage />);
+    enterValidMetadata();
+    selectLogo(new File(["png-bytes"], "logo.png", { type: "image/png" }));
+    expect(screen.getByText(/Selected logo\.png/)).toBeInTheDocument();
+    goToReview();
+
+    fireEvent.click(screen.getByRole("button", { name: "Prepare metadata" }));
+    expect(await screen.findByText(/Metadata pinned to IPFS/)).toBeInTheDocument();
+
+    expect(pin.pinFile).toHaveBeenCalledTimes(1);
+    expect(pin.pinFile.mock.invocationCallOrder[0]).toBeLessThan(
+      pin.pinJson.mock.invocationCallOrder[0],
+    );
+    expect(
+      screen.getByLabelText("Community metadata JSON preview"),
+    ).toHaveTextContent('"logo":"ipfs://bafylogo"');
+    expect(
+      screen.getByLabelText("Collection metadata JSON preview"),
+    ).toHaveTextContent('"image":"ipfs://bafylogo"');
+    expect(screen.getByText(/logo: ipfs:\/\/bafylogo/)).toBeInTheDocument();
+  });
+
+  it("keeps deployment locked and offers retry when pinning fails, preserving the draft", async () => {
+    wallet.useWallet.mockReturnValue(connectedWallet());
+    pin.pinJson.mockRejectedValueOnce(
+      new IpfsPinError("provider", "Pinata is unavailable."),
+    );
+    render(<CreateCommunityPage />);
+    enterValidMetadata();
+    goToReview();
+    fireEvent.click(screen.getByLabelText(/I confirm that these metadata/));
+
+    fireEvent.click(screen.getByRole("button", { name: "Prepare metadata" }));
+
+    expect(
+      await screen.findByText(/Pinning failed: Pinata is unavailable\./),
+    ).toHaveAttribute("role", "alert");
+    expect(simulateButton()).toBeDisabled();
+    expect(screen.getByText("Builders Guild")).toBeInTheDocument();
+    expect(screen.getByText("BUILD")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Retry pinning" }));
+    expect(await screen.findByText(/Metadata pinned to IPFS/)).toBeInTheDocument();
+    await waitFor(() => expect(simulateButton()).toBeEnabled());
+  });
+
+  it("reports a missing PINATA_JWT as a configuration error and never simulates", async () => {
+    wallet.useWallet.mockReturnValue(connectedWallet());
+    pin.pinJson.mockRejectedValue(
+      new IpfsPinError(
+        "config",
+        "IPFS pinning is not configured on this server. Set PINATA_JWT before creating communities or minting.",
+      ),
+    );
+    render(<CreateCommunityPage />);
+    enterValidMetadata();
+    goToReview();
+    fireEvent.click(screen.getByLabelText(/I confirm that these metadata/));
+
+    fireEvent.click(screen.getByRole("button", { name: "Prepare metadata" }));
+
+    expect(await screen.findByText(/Set PINATA_JWT/)).toBeInTheDocument();
+    expect(screen.getByText(/Retrying will not help/)).toBeInTheDocument();
+    expect(simulateButton()).toBeDisabled();
+    expect(deployment.simulate).not.toHaveBeenCalled();
+  });
+
+  it("invalidates pinned documents when the draft changes afterwards", async () => {
+    wallet.useWallet.mockReturnValue(connectedWallet());
+    render(<CreateCommunityPage />);
+    enterValidMetadata();
+    goToReview();
+    fireEvent.click(screen.getByRole("button", { name: "Prepare metadata" }));
+    expect(await screen.findByText(/Metadata pinned to IPFS/)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Edit metadata" }));
+    fireEvent.change(screen.getByLabelText(/Community name/), {
+      target: { value: "Renamed Guild" },
+    });
+    goToReview();
+
+    await waitFor(() =>
+      expect(
+        screen.queryByText(/Metadata pinned to IPFS/),
+      ).not.toBeInTheDocument(),
+    );
+    expect(screen.getByRole("button", { name: "Prepare metadata" })).toBeInTheDocument();
+    await waitFor(() =>
+      expect(
+        screen.getByLabelText("Community metadata JSON preview"),
+      ).toHaveTextContent('"name":"Renamed Guild"'),
+    );
+    fireEvent.click(screen.getByLabelText(/I confirm that these metadata/));
+    await waitFor(() => expect(deployment.readFactoryOwner).toHaveBeenCalled());
+    expect(simulateButton()).toBeDisabled();
   });
 
   it("invalidates review confirmation when the connected account changes", async () => {
-    wallet.useWallet.mockReturnValue({
-      address: "GOLDACCOUNT",
-      walletNetwork: "testnet",
-      walletNetworkPassphrase: "Test SDF Network ; September 2015",
-      connect: vi.fn(),
-      signTransaction: vi.fn(),
-      isConnecting: false,
-    });
+    wallet.useWallet.mockReturnValue(connectedWallet("GOLDACCOUNT"));
     const { rerender } = render(<CreateCommunityPage />);
     enterValidMetadata();
-    fireEvent.click(
-      screen.getByRole("button", { name: "Continue to governance" }),
-    );
-    fireEvent.click(screen.getByRole("button", { name: "Review community" }));
+    goToReview();
     fireEvent.click(
       screen.getByLabelText(/I confirm that these metadata/),
     );
     expect(screen.getByLabelText(/I confirm that these metadata/)).toBeChecked();
 
-    wallet.useWallet.mockReturnValue({
-      address: "GNEWACCOUNT",
-      walletNetwork: "testnet",
-      walletNetworkPassphrase: "Test SDF Network ; September 2015",
-      connect: vi.fn(),
-      signTransaction: vi.fn(),
-      isConnecting: false,
-    });
+    wallet.useWallet.mockReturnValue(connectedWallet("GNEWACCOUNT"));
     rerender(<CreateCommunityPage />);
 
     await waitFor(() =>
@@ -244,9 +430,7 @@ describe("CreateCommunityPage", () => {
 
     expect(screen.getByLabelText(/Community name/)).toHaveValue("");
     await waitFor(() =>
-      expect(
-        sessionStorage.getItem("stolla:community-wizard:testnet:v1"),
-      ).toBeNull(),
+      expect(sessionStorage.getItem(STORAGE_KEY)).toBeNull(),
     );
     expect(screen.getByRole("heading", { name: "Describe your community" })).toHaveFocus();
   });
@@ -307,9 +491,7 @@ describe("CreateCommunityPage", () => {
       target: { value: "Dirty DAO" },
     });
     await waitFor(() =>
-      expect(
-        sessionStorage.getItem("stolla:community-wizard:testnet:v1"),
-      ).toContain("Dirty DAO"),
+      expect(sessionStorage.getItem(STORAGE_KEY)).toContain("Dirty DAO"),
     );
 
     const event = new Event("beforeunload", { cancelable: true }) as BeforeUnloadEvent;

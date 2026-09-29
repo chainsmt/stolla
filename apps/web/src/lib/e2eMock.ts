@@ -1,5 +1,6 @@
 import type { CommunityDeploymentAdapter } from "@/lib/community/deployment";
 import type { CommunityDetailResult, CommunityRegistryPage } from "@/lib/community/types";
+import type { IpfsPinClient } from "@/lib/ipfs/pin";
 
 export type E2EProposal = {
   id: string;
@@ -19,6 +20,8 @@ export type StollaE2EBridge = {
   communities?: CommunityRegistryPage["communities"];
   proposals?: Record<string, E2EProposal[]>;
   deployment?: CommunityDeploymentAdapter;
+  /** Replaces the `/api/ipfs/pin` client so browser tests never upload. */
+  pin?: IpfsPinClient;
   diagnostics?: {
     submissions: number;
     invocations: unknown[];

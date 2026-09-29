@@ -4,7 +4,12 @@ import {
   type GovernanceDraft,
 } from "./schema";
 
-export const COMMUNITY_WIZARD_DRAFT_VERSION = 1 as const;
+/**
+ * Version 2 dropped the user-typed collection, metadata, and logo URI fields.
+ * Version-1 drafts are discarded on load because their URIs are no longer
+ * part of the authoring model.
+ */
+export const COMMUNITY_WIZARD_DRAFT_VERSION = 2 as const;
 export type CommunityWizardStep = 1 | 2 | 3;
 
 export type CommunityWizardDraft = {
@@ -19,9 +24,6 @@ export const EMPTY_METADATA_DRAFT: CommunityMetadataDraft = {
   name: "",
   symbol: "",
   description: "",
-  collectionUri: "",
-  metadataUri: "",
-  logo: "",
   externalLinkLabel: "",
   externalLinkUrl: "",
 };
@@ -30,9 +32,6 @@ const METADATA_FIELDS: (keyof CommunityMetadataDraft)[] = [
   "name",
   "symbol",
   "description",
-  "collectionUri",
-  "metadataUri",
-  "logo",
   "externalLinkLabel",
   "externalLinkUrl",
 ];

@@ -9,10 +9,10 @@ import {
 describe("community wizard session draft", () => {
   it("scopes versioned storage to the configured network", () => {
     expect(communityWizardStorageKey("testnet")).toBe(
-      "stolla:community-wizard:testnet:v1",
+      "stolla:community-wizard:testnet:v2",
     );
     expect(communityWizardStorageKey("mainnet")).toBe(
-      "stolla:community-wizard:mainnet:v1",
+      "stolla:community-wizard:mainnet:v2",
     );
   });
 
@@ -34,6 +34,26 @@ describe("community wizard session draft", () => {
         "testnet",
       ),
     ).toBeNull();
+  });
+
+  it("discards version-1 drafts that still carried user-typed URI fields", () => {
+    const legacy = {
+      version: 1,
+      network: "testnet",
+      step: 1,
+      metadata: {
+        name: "Legacy",
+        symbol: "OLD",
+        description: "Typed URIs",
+        collectionUri: "ipfs://bafy/collection.json",
+        metadataUri: "https://legacy.example/community.json",
+        logo: "",
+        externalLinkLabel: "",
+        externalLinkUrl: "",
+      },
+      governance: { proposalThreshold: "1", quorum: "1", votingDelay: "1", votingPeriod: "10" },
+    };
+    expect(parseCommunityWizardDraft(JSON.stringify(legacy), "testnet")).toBeNull();
   });
 
   it("marks only changed persisted fields as dirty", () => {

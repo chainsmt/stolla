@@ -24,11 +24,14 @@ const input = {
     name: "Builders Guild",
     symbol: "BUILD",
     description: "Build public goods.",
-    collectionUri: "ipfs://collection",
-    metadataUri: "https://example.test/community.json",
-    logo: "",
     externalLinkLabel: "",
     externalLinkUrl: "",
+  },
+  payload: {
+    collectionUri: "ipfs://collection",
+    metadataUri: "ipfs://community",
+    metadataHash:
+      "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
   },
   governance: {
     proposalThreshold: "340282366920938463463374607431768211455",
@@ -64,6 +67,28 @@ describe("community deployment serialization", () => {
     expect(Array.from(metadata.metadata_hash as Uint8Array)).toEqual(
       Array.from(hash),
     );
+    expect(metadata.collection_uri).toBe("ipfs://collection");
+    expect(metadata.metadata_uri).toBe("ipfs://community");
+  });
+
+  it("uses the generated payload hash when no override is supplied", async () => {
+    const invocation = await serializeCommunityFactoryInvocation(input);
+    expect(invocation.metadataHash).toBe(input.payload.metadataHash);
+  });
+
+  it("fails closed when the pin pipeline did not produce URIs or a hash", async () => {
+    await expect(
+      serializeCommunityFactoryInvocation({
+        ...input,
+        payload: { collectionUri: "", metadataUri: "", metadataHash: "" },
+      }),
+    ).rejects.toThrow(/Deployment payload is incomplete/);
+    await expect(
+      serializeCommunityFactoryInvocation({
+        ...input,
+        payload: { ...input.payload, metadataHash: "0".repeat(64) },
+      }),
+    ).rejects.toThrow(/non-zero 32-byte/);
   });
 
   it("fails closed on a mismatched network passphrase before simulation", async () => {
