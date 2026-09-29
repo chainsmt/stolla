@@ -121,6 +121,29 @@ describe("ProposalsPage create lifecycle", () => {
     expect(propose).not.toHaveBeenCalled();
   });
 
+  it("blocks invalid discussion URLs before simulation", async () => {
+    const propose = vi.fn();
+    mocks.createGovernorClient.mockReturnValue({
+      propose,
+      proposal_state: vi.fn(),
+    });
+
+    render(<ProposalsPage />);
+    fillDescription();
+    fireEvent.change(
+      screen.getByRole("textbox", { name: "Discussion link (optional)" }),
+      { target: { value: "http://insecure.example/topic" } },
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Create proposal" }));
+
+    expect(
+      await screen.findByText(
+        /Discussion link must be an HTTPS URL without embedded credentials/i,
+      ),
+    ).toBeInTheDocument();
+    expect(propose).not.toHaveBeenCalled();
+  });
+
   it("shows lifecycle stages, clears form on success, and refreshes discovery", async () => {
     const signGate = deferred<void>();
     const sendGate = deferred<{ result: Uint8Array; hash: string }>();
