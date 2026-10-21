@@ -30,6 +30,7 @@ function shortenAddress(addr: string): string {
 }
 import { fetchVoteTotals, type VoteTotals } from "@/lib/proposal-events";
 import { fmt, pct } from "@/lib/voteDisplay";
+import { PartialHistoryNotice } from "@/components/PartialHistoryNotice";
 import { useProposalDiscovery } from "@/hooks/useProposalDiscovery";
 import { ProposalMetadataDisplay } from "@/components/proposal/ProposalMetadataDisplay";
 import { LEDGER_TIME_ASSUMPTION_NOTE } from "@/lib/community/governanceDisplay";
@@ -63,9 +64,12 @@ export default function ProposalDetailPage({
     community?.metadata?.name ??
     (community ? `Community ${truncateMiddle(community.record.id)}` : null);
   const isValidId = parseProposalId(proposalIdHex) !== null;
-  const { proposals: discoveredProposals, latestLedger } = useProposalDiscovery(
-    governorContractId || undefined,
-  );
+  const {
+    proposals: discoveredProposals,
+    latestLedger,
+    partialHistory = null,
+    refresh: refreshDiscovery,
+  } = useProposalDiscovery(governorContractId || undefined);
   const proposalDescription = discoveredProposals.find(
     (candidate) => candidate.id.toLowerCase() === proposalIdHex.toLowerCase(),
   )?.description;
@@ -625,6 +629,13 @@ export default function ProposalDetailPage({
       <div aria-live="polite" className="sr-only">
         {copied ? "Proposer address copied to clipboard" : null}
       </div>
+
+      {partialHistory && (
+        <PartialHistoryNotice
+          state={partialHistory}
+          onRetry={() => void refreshDiscovery()}
+        />
+      )}
 
       <section className="mt-6 rounded-xl border border-slate-800 bg-[#151b2b] p-5">
         {proposalDescription ? (

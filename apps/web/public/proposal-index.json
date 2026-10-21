@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "configuredStartLedger": null,
+  "indexedFromLedger": null,
+  "indexedThroughLedger": null,
+  "historyGap": false,
+  "gapNote": "Local proposal index. Replace this file with a backfill taken from NEXT_PUBLIC_GOVERNOR_START_LEDGER while that ledger is still inside RPC retention. Events that age out before they are stored cannot be reconstructed.",
+  "records": []
+}

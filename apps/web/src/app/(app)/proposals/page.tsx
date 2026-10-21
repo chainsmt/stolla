@@ -22,6 +22,7 @@ import { truncateEnd } from "@/lib/truncate";
 import { LiveStatus } from "@/components/ui/LiveStatus";
 import { TransactionLifecycleStatus } from "@/components/TransactionLifecycleStatus";
 import { DiscoveryFreshnessBanner } from "@/components/DiscoveryFreshnessBanner";
+import { PartialHistoryNotice } from "@/components/PartialHistoryNotice";
 import { useOperationLifecycle } from "@/hooks/useOperationLifecycle";
 import { contractIds as stellarContractIds } from "@/lib/stellar";
 import {
@@ -74,6 +75,7 @@ export default function ProposalsPage() {
     errorKind,
     empty,
     freshness,
+    partialHistory = null,
     latestLedger,
     refresh,
   } =
@@ -530,6 +532,13 @@ export default function ProposalsPage() {
         {!loading && !error && (
           <DiscoveryFreshnessBanner
             freshness={freshness}
+            onRetry={handleRetryDiscovery}
+          />
+        )}
+
+        {!loading && partialHistory && (
+          <PartialHistoryNotice
+            state={partialHistory}
             onRetry={handleRetryDiscovery}
           />
         )}

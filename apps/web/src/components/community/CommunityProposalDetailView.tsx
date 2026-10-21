@@ -104,14 +104,14 @@ function CommunityProposalDetailPanel({
 
   const cancelAction = useGovernorProposalAction({
     governorAddress: community.record.governorContract,
-    proposalId</proposalId>,
+    proposalId,
     action: "cancel",
     onSuccess: refresh,
   });
 
   const executeAction = useGovernorProposalAction({
     governorAddress: community.record.governorContract,
-    proposalId</proposalId>,
+    proposalId,
     action: "execute",
     onSuccess: refresh,
   });
@@ -177,7 +177,7 @@ function CommunityProposalDetailPanel({
                       ? "Connect wallet to cancel"
                       : !isCorrectChain
                         ? "Switch network to cancel"
-                        : !OanCancel
+                        : !canCancel
                           ? "Only the proposer can cancel"
                           : undefined
                   }

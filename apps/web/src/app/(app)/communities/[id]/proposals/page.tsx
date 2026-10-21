@@ -10,6 +10,7 @@ import { AppLinkButton } from "@/components/ui/AppLinkButton";
 import { LiveStatus } from "@/components/ui/LiveStatus";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { ScopedProposalEmptyState } from "@/components/community/ScopedProposalEmptyState";
+import { PartialHistoryNotice } from "@/components/PartialHistoryNotice";
 import { useProposalDiscovery } from "@/hooks/useProposalDiscovery";
 import { getCommunity } from "@/lib/community/registry";
 import type { CommunityView } from "@/lib/community/types";
@@ -25,8 +26,15 @@ const ALL_STATES = "all";
 
 function ScopedProposalHistory({ community }: { community: CommunityView }) {
   const governorContract = community.record.governorContract;
-  const { proposals: discovered, loading, error, empty, refresh, latestLedger } =
-    useProposalDiscovery(governorContract);
+  const {
+    proposals: discovered,
+    loading,
+    error,
+    empty,
+    refresh,
+    latestLedger,
+    partialHistory = null,
+  } = useProposalDiscovery(governorContract);
   const proposals = useMemo(
     () =>
       Array.from(
@@ -188,10 +196,17 @@ function ScopedProposalHistory({ community }: { community: CommunityView }) {
           <ScopedProposalEmptyState key={community.record.id} community={community} refresh={refresh} />
         )}
 
-        {!loading && !error && !empty && proposals.length === 0 && (
+        {!loading && !error && !empty && proposals.length === 0 && !partialHistory && (
           <LiveStatus className="mt-3 rounded-lg border border-amber-800/70 bg-amber-950/40 p-5 text-sm text-amber-200">
             Proposal history is incomplete. Earlier events are outside the RPC retention window, so the full history is unavailable here.
           </LiveStatus>
+        )}
+
+        {!loading && partialHistory && (
+          <PartialHistoryNotice
+            state={partialHistory}
+            onRetry={() => void refresh()}
+          />
         )}
 
         {!loading && proposals.length > 0 && filtered.length === 0 && (

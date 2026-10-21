@@ -17,6 +17,9 @@ vi.mock("@/hooks/useProposalDiscovery", () => ({
       explanation: "Proposal history is up to date.",
       ledgerGap: 0,
     },
+    partialHistory: null,
+    errorKind: null,
+    latestLedger: null,
     refresh: vi.fn(),
   })),
 }));
@@ -89,6 +92,8 @@ describe("ProposalsPage - localStorage not required for proposals", () => {
         explanation: "Proposal history is partial: earlier events are outside the RPC retention window.",
         ledgerGap: null,
       },
+      partialHistory: null,
+      errorKind: null,
       latestLedger: null,
       refresh: vi.fn(),
     });

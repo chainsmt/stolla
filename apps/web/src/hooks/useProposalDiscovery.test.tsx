@@ -4,6 +4,8 @@ import { Address, xdr } from "@stellar/stellar-sdk";
 import { Buffer } from "buffer";
 import { useProposalDiscovery } from "./useProposalDiscovery";
 import { mapDiscoveryError } from "./useProposalDiscovery";
+import { loadProposalIndex } from "@/lib/proposal-index/load";
+import { MemoryProposalIndex } from "@/lib/proposal-index/store";
 
 const { getEvents, getLatestLedger, mockFetch, requireStartLedger } = vi.hoisted(() => ({
   getEvents: vi.fn(),
@@ -26,9 +28,17 @@ vi.mock("@/lib/stellar", () => ({
 
 vi.mock("@/lib/e2eMock", () => ({ getE2EBridge: () => undefined }));
 
+vi.mock("@/lib/proposal-index/load", () => ({
+  loadProposalIndex: vi.fn(async () => ({ status: "unavailable", message: "down" })),
+}));
+
 describe("useProposalDiscovery retention handling", () => {
   beforeEach(() => {
     vi.resetAllMocks();
+    vi.mocked(loadProposalIndex).mockResolvedValue({
+      status: "unavailable",
+      message: "down",
+    });
     requireStartLedger.mockReturnValue(1);
     getLatestLedger.mockResolvedValue({ sequence: 200 });
     mockFetch.mockResolvedValue({ ok: true, json: async () => ({ result: { oldestLedger: 100 } }) });
@@ -45,6 +55,54 @@ describe("useProposalDiscovery retention handling", () => {
     expect(result.current.empty).toBe(false);
     expect(result.current.freshness.state).toBe("stale");
     expect(result.current.freshness.explanation).toMatch(/RPC retention window/);
+    expect(result.current.partialHistory?.reason).toBe("indexer-unavailable");
+    expect(result.current.partialHistory?.action).toMatch(/Retry/);
+  });
+
+  it("lists an indexed proposal when the RPC scan is clamped", async () => {
+    const olderId = "11".repeat(32);
+    const index = new MemoryProposalIndex();
+    index.upsertEvents([{
+      name: "ProposalCreated",
+      governorContractId: "CGOVERNOR",
+      proposalId: olderId,
+      ledger: 20,
+      txHash: "tx-old",
+      description: "Older than retention",
+      voteSnapshot: 30,
+      voteEnd: 90,
+    }]);
+    vi.mocked(loadProposalIndex).mockResolvedValue({
+      status: "ok",
+      snapshot: index.toSnapshot(),
+    });
+
+    const { result } = renderHook(() => useProposalDiscovery());
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    expect(result.current.proposals).toEqual([{
+      id: olderId,
+      description: "Older than retention",
+      voteSnapshot: 30,
+      voteEnd: 90,
+    }]);
+    expect(result.current.partialHistory).toBeNull();
+    expect(result.current.empty).toBe(false);
+  });
+
+  it("keeps a clamped page usable when the indexer has no rows", async () => {
+    vi.mocked(loadProposalIndex).mockResolvedValue({
+      status: "empty",
+      snapshot: new MemoryProposalIndex().toSnapshot(),
+    });
+
+    const { result } = renderHook(() => useProposalDiscovery());
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    expect(result.current.proposals).toEqual([]);
+    expect(result.current.partialHistory?.reason).toBe("indexer-empty");
+    expect(result.current.partialHistory?.action).toMatch(/Backfill/);
+    expect(result.current.error).toBeNull();
   });
 
   it("keeps deadline and snapshot ledgers from a proposal-created event", async () => {

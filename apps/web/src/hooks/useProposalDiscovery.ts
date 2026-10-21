@@ -11,6 +11,8 @@ import {
   type FreshnessResult,
 } from "@/lib/proposal-events";
 import { resolveEventStartLedger, retentionErrorMessage } from "@/lib/proposal-events/retention";
+import { hydrateProposalHistory, type PartialHistoryState } from "@/lib/proposal-index/hydrate";
+import { loadProposalIndex } from "@/lib/proposal-index/load";
 import { getE2EBridge } from "@/lib/e2eMock";
 
 export type DiscoveredProposal = {
@@ -43,14 +45,25 @@ const GOVERNOR_START_LEDGER_ENV = "NEXT_PUBLIC_GOVERNOR_START_LEDGER";
  * configuration mistakes from transient RPC outages.
  */
 export function mapDiscoveryError(err: unknown): DiscoveryError {
+  const retentionCopy = retentionErrorMessage(err);
+  if (retentionCopy) {
+    return { kind: "retention", message: retentionCopy, cause: err };
+  }
+
   const rawMessage =
     err instanceof Error
       ? err.message
       : typeof err === "string"
         ? err
-        : "";
+        : err && typeof err === "object" && "message" in err && typeof err.message === "string"
+          ? err.message
+          : "";
   const message = rawMessage.trim();
   const lower = message.toLowerCase();
+
+  if (lower.includes("next_public_governor_start_ledger")) {
+    return mapStartLedgerConfigError(err);
+  }
 
   if (
     lower.includes("startledger must be within the ledger range") ||
@@ -153,6 +166,7 @@ export function useProposalDiscovery(governorContractId?: string) {
   const [error, setError] = useState<string | null>(null);
   const [errorKind, setErrorKind] = useState<DiscoveryErrorKind | null>(null);
   const [empty, setEmpty] = useState(false);
+  const [partialHistory, setPartialHistory] = useState<PartialHistoryState | null>(null);
   const [freshnessMeta, setFreshnessMeta] = useState<{
     latestLedger: number | null;
     lastEventLedger: number | null;
@@ -172,6 +186,7 @@ export function useProposalDiscovery(governorContractId?: string) {
     setError(null);
     setErrorKind(null);
     setEmpty(false);
+    setPartialHistory(null);
 
     try {
       const governor = governorContractId ?? requireContractIds().governor;
@@ -187,6 +202,7 @@ export function useProposalDiscovery(governorContractId?: string) {
           hadError: false,
           retentionClamped: false,
         });
+        setPartialHistory(null);
         return true;
       }
       const server = new RpcServer(config.rpcUrl);
@@ -283,12 +299,25 @@ export function useProposalDiscovery(governorContractId?: string) {
       }
 
       discovered.reverse();
-      setProposals(discovered);
-      setEmpty(discovered.length === 0 && !hadError && !clamped);
+      const hydration = hydrateProposalHistory({
+        governorContractId: governor,
+        retentionClamped: clamped,
+        rpcProposals: discovered,
+        index: clamped ? await loadProposalIndex() : { status: "skipped" },
+      });
+      const merged = hydration.proposals.map((proposal) => ({
+        id: proposal.id,
+        description: proposal.description,
+        voteSnapshot: proposal.voteSnapshot,
+        voteEnd: proposal.voteEnd,
+      }));
+      setProposals(merged);
+      setPartialHistory(hydration.partialHistory);
+      setEmpty(merged.length === 0 && !hadError && !clamped);
       setFreshnessMeta({
         latestLedger,
         lastEventLedger,
-        discoveredCount: discovered.length,
+        discoveredCount: merged.length,
         hadError,
         retentionClamped: clamped,
       });
@@ -305,6 +334,7 @@ export function useProposalDiscovery(governorContractId?: string) {
         : mapped;
       setError(finalError.message);
       setErrorKind(finalError.kind);
+      setPartialHistory(null);
       setFreshnessMeta({ latestLedger: null, lastEventLedger: null, discoveredCount: 0, hadError: true, retentionClamped: false });
       return false;
     } finally {
@@ -335,6 +365,7 @@ export function useProposalDiscovery(governorContractId?: string) {
     errorKind,
     empty,
     freshness,
+    partialHistory,
     latestLedger: freshnessMeta.latestLedger,
     refresh: discover,
   };

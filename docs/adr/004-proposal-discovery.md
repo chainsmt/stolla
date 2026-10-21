@@ -132,6 +132,41 @@ For that reason, v0.2 is acceptable for a single-community testnet deployment,
 but it is not the terminal architecture for long-lived public governance
 history.
 
+## Indexer boundary (issue #344)
+
+The retention escalation below is now active for list and detail hydration.
+Stolla does **not** require a hosted indexer or the PostgreSQL service sketched
+in [community proposal indexing](../community-proposal-indexing.md). The
+shipped read model is a versioned JSON snapshot:
+
+- key: `governorContractId + proposalId`
+- events: `ProposalCreated`, `VoteCast`, `ProposalQueued`, `ProposalExecuted`,
+  `ProposalCancelled`
+- storage: in-memory `MemoryProposalIndex`, persisted as
+  `apps/web/public/proposal-index.json` (or `NEXT_PUBLIC_PROPOSAL_INDEX_URL`)
+- browser reads that file with `loadProposalIndex`
+- backfill is `backfillProposalIndex` in `apps/web/src/lib/proposal-index/`
+
+Backfill starts at `NEXT_PUBLIC_GOVERNOR_START_LEDGER` only while that ledger
+is still inside the RPC oldest-retained ledger. The scan then runs forward to
+the latest retained ledger. Replays are idempotent.
+
+When the configured start ledger is already older than RPC retention, the
+backfill sets `historyGap`. It stores only events that are still retained and
+keeps rows written by an earlier backfill. Events that aged out before they
+were stored cannot be reconstructed from RPC. The snapshot records that gap
+instead of pretending the history is complete.
+
+The web client calls the index only when `resolveEventStartLedger` reports
+`clamped`. Indexed rows fill proposal ids and descriptions that the retained
+scan cannot see. Live `proposal_state` reads and `fetchVoteTotals` stay on
+RPC, including for proposals that were hydrated from the index.
+
+If the index request fails, or the file has no rows for that governor, the UI
+keeps every proposal still inside retention and shows a partial-history
+notice with a retry and a pointer back to this boundary. It does not replace
+the page with an empty list.
+
 ## Indexer Escalation Criteria
 
 Adopt a persistent indexer when any of these become true:
@@ -145,7 +180,9 @@ Adopt a persistent indexer when any of these become true:
 - Operators need auditable backfills, reorg handling, or historical repairs
 
 At that point, the indexer becomes the system of record for proposal discovery,
-with RPC remaining the ingestion source.
+with RPC remaining the ingestion source. Issue #344 meets the retention
+criterion with the minimal JSON boundary above. A hosted multi-community
+indexer is still future work, not a dependency of the web app.
 
 ## Consequences
 

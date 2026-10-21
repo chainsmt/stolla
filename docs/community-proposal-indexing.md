@@ -7,6 +7,27 @@ single-Governor approach in [ADR-004](adr/004-proposal-discovery.md) to the
 multi-community registry defined by
 [ADR-005](adr/005-community-factory-registry.md).
 
+## Implementation boundary (issue #344)
+
+The PostgreSQL service described below is a target design. Running Stolla does
+not require that service, a subgraph, or any hosted indexer product.
+
+What ships now is a local read model:
+
+| Piece | Boundary |
+|---|---|
+| Identity | `governorContractId` + lowercase proposal id |
+| Events | `ProposalCreated`, `VoteCast`, and state transitions `ProposalQueued`, `ProposalExecuted`, `ProposalCancelled` |
+| Store | In-memory `MemoryProposalIndex`, written to JSON. The app serves `apps/web/public/proposal-index.json`. Override the URL with `NEXT_PUBLIC_PROPOSAL_INDEX_URL`. |
+| Backfill | From `NEXT_PUBLIC_GOVERNOR_START_LEDGER` while that ledger is still inside RPC retention, then forward to the latest retained ledger. A repeated backfill does not duplicate events. |
+| History already gone | If the configured start ledger is older than the RPC oldest retained ledger, the snapshot sets `historyGap`. Only events still inside retention are ingested. Previously stored rows are kept. Ledgers that aged out before they were indexed are not recoverable from RPC. |
+| Web list and detail | When discovery is clamped, hydrate missing proposals from the index. When the index is down or has no rows for the governor, keep the RPC rows and show a partial-history notice with a retry. Do not render a blank page. |
+| Live data | Current proposal state and vote totals stay on RPC. Indexed `VoteCast` rows are history, not the live tally. |
+
+Code lives in `apps/web/src/lib/proposal-index/`. ADR-004 records the same
+boundary. The sections after this one remain the design for a future shared
+indexing service.
+
 ## Decision
 
 Stolla will use a shared, read-only indexing service for community proposal

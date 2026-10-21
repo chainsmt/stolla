@@ -37,7 +37,7 @@ const STAGE_COLORS: Record<TransactionStage, string> = {
   duplicate_vote: "bg-amber-500",
 };
 
-const FAILURE_STAGES = new Set<TransactionStage>(['
+const FAILURE_STAGES = new Set<TransactionStage>([
   "wallet_rejected",
   "simulation_failed",
   "submission_failed",
